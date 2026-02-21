@@ -24,36 +24,92 @@ module.exports = {
             return;
         }
 
-        // DiscordSRV formats:
-        // Join: ":white_check_mark: **Username** joined the server"
-        // Leave: ":x: **Username** left the server"
-        
         const content = message.content;
+        const embeds = message.embeds;
         
         // DEBUG: Log every message in console channel
         console.log(`[MC SYNC DEBUG] Message in console: "${content}"`);
 
         // Check for player join
-        // Support multiple DiscordSRV formats:
-        // Format 1: "✅ **Username** joined the server"
-        // Format 2: "[Fri 18:16:42 INFO  Server] Username joined the game"
+        // Support ALL possible DiscordSRV formats:
+        // 1. Standard embed: "✅ **Username** joined the server"
+        // 2. Emoji text: ":white_check_mark: **Username** joined the server"
+        // 3. Simple text: "Username joined the server"
+        // 4. Server log: "[Fri 18:16:42 INFO  Server] Username joined the game"
+        // 5. Embed author: Just "Username joined the server" in embed
+        // 6. With display name: "Username (DisplayName) joined"
         
-        let joinMatch = content.match(/(?:✅|:white_check_mark:)\s*\*\*(.+?)\*\*\s*(?:joined|joined the server)/i);
+        let minecraftUsername = null;
         
-        // If not found, try server log format
-        if (!joinMatch) {
-            joinMatch = content.match(/\[.*?\]\s+\[.*?\]\s+(\w+)\s+joined the (?:game|server)/i);
+        // Try different patterns in order of specificity
+        const patterns = [
+            // Pattern 1: Emoji + bold username
+            /(?:✅|:white_check_mark:|☑️)\s*\*\*(.+?)\*\*\s*(?:joined|has joined)/i,
+            
+            // Pattern 2: Server log format
+            /\[.*?\]\s*\[.*?\]\s*(\w+)\s+(?:joined|left)/i,
+            
+            // Pattern 3: Simple bold
+            /\*\*(.+?)\*\*\s*(?:joined|has joined)/i,
+            
+            // Pattern 4: Username at start
+            /^(\w+)\s+(?:joined|has joined)/i,
+            
+            // Pattern 5: With parentheses display name
+            /(\w+)\s*\([^)]+\)\s*(?:joined|has joined)/i,
+        ];
+        
+        // Try each pattern
+        for (const pattern of patterns) {
+            const match = content.match(pattern);
+            if (match) {
+                minecraftUsername = match[1];
+                break;
+            }
         }
         
-        if (joinMatch) {
-            const minecraftUsername = joinMatch[1];
+        // If not found in content, check embeds
+        if (!minecraftUsername && embeds.length > 0) {
+            for (const embed of embeds) {
+                // Check embed author
+                if (embed.author && embed.author.name) {
+                    const embedMatch = embed.author.name.match(/(\w+)\s+(?:joined|has joined)/i);
+                    if (embedMatch) {
+                        minecraftUsername = embedMatch[1];
+                        break;
+                    }
+                }
+                // Check embed description
+                if (!minecraftUsername && embed.description) {
+                    const embedMatch = embed.description.match(/(\w+)\s+(?:joined|has joined)/i);
+                    if (embedMatch) {
+                        minecraftUsername = embedMatch[1];
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (minecraftUsername) {
             console.log(`[MC SYNC DEBUG] Detected join for: "${minecraftUsername}"`);
             
             // Try to find the Discord user by their nickname or username
-            const member = message.guild.members.cache.find(m => 
-                m.displayName.toLowerCase().includes(minecraftUsername.toLowerCase()) ||
-                m.user.username.toLowerCase().includes(minecraftUsername.toLowerCase())
-            );
+            const member = message.guild.members.cache.find(m => {
+                const displayName = m.displayName.toLowerCase();
+                const userName = m.user.username.toLowerCase();
+                const mcName = minecraftUsername.toLowerCase();
+                
+                // Exact match
+                if (displayName === mcName || userName === mcName) return true;
+                
+                // Contains match
+                if (displayName.includes(mcName) || userName.includes(mcName)) return true;
+                
+                // MC name contains Discord name (for names like "Steve123" matching "Steve")
+                if (mcName.includes(displayName) || mcName.includes(userName)) return true;
+                
+                return false;
+            });
 
             if (member) {
                 console.log(`[MC SYNC DEBUG] Found Discord user: ${member.user.tag}`);
@@ -70,26 +126,79 @@ module.exports = {
         }
 
         // Check for player leave
-        // Support multiple DiscordSRV formats:
-        // Format 1: "❌ **Username** left the server"
-        // Format 2: "[Fri 18:16:42 INFO  Server] Username left the game"
+        // Support ALL possible DiscordSRV formats:
+        // Same patterns as join, but for "left" messages
         
-        let leaveMatch = content.match(/(?:❌|:x:)\s*\*\*(.+?)\*\*\s*(?:left|left the server|disconnected)/i);
+        minecraftUsername = null;
         
-        // If not found, try server log format
-        if (!leaveMatch) {
-            leaveMatch = content.match(/\[.*?\]\s+\[.*?\]\s+(\w+)\s+left the (?:game|server)/i);
+        const leavePatterns = [
+            // Pattern 1: Emoji + bold username
+            /(?:❌|:x:|✖️|:cross_mark:)\s*\*\*(.+?)\*\*\s*(?:left|has left|disconnected)/i,
+            
+            // Pattern 2: Server log format
+            /\[.*?\]\s*\[.*?\]\s*(\w+)\s+(?:left|disconnected)/i,
+            
+            // Pattern 3: Simple bold
+            /\*\*(.+?)\*\*\s*(?:left|has left|disconnected)/i,
+            
+            // Pattern 4: Username at start
+            /^(\w+)\s+(?:left|has left|disconnected)/i,
+            
+            // Pattern 5: With parentheses display name
+            /(\w+)\s*\([^)]+\)\s*(?:left|has left|disconnected)/i,
+        ];
+        
+        // Try each pattern
+        for (const pattern of leavePatterns) {
+            const match = content.match(pattern);
+            if (match) {
+                minecraftUsername = match[1];
+                break;
+            }
         }
         
-        if (leaveMatch) {
-            const minecraftUsername = leaveMatch[1];
+        // If not found in content, check embeds
+        if (!minecraftUsername && embeds.length > 0) {
+            for (const embed of embeds) {
+                // Check embed author
+                if (embed.author && embed.author.name) {
+                    const embedMatch = embed.author.name.match(/(\w+)\s+(?:left|has left|disconnected)/i);
+                    if (embedMatch) {
+                        minecraftUsername = embedMatch[1];
+                        break;
+                    }
+                }
+                // Check embed description
+                if (!minecraftUsername && embed.description) {
+                    const embedMatch = embed.description.match(/(\w+)\s+(?:left|has left|disconnected)/i);
+                    if (embedMatch) {
+                        minecraftUsername = embedMatch[1];
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (minecraftUsername) {
             console.log(`[MC SYNC DEBUG] Detected leave for: "${minecraftUsername}"`);
             
             // Try to find the Discord user
-            const member = message.guild.members.cache.find(m => 
-                m.displayName.toLowerCase().includes(minecraftUsername.toLowerCase()) ||
-                m.user.username.toLowerCase().includes(minecraftUsername.toLowerCase())
-            );
+            const member = message.guild.members.cache.find(m => {
+                const displayName = m.displayName.toLowerCase();
+                const userName = m.user.username.toLowerCase();
+                const mcName = minecraftUsername.toLowerCase();
+                
+                // Exact match
+                if (displayName === mcName || userName === mcName) return true;
+                
+                // Contains match
+                if (displayName.includes(mcName) || userName.includes(mcName)) return true;
+                
+                // MC name contains Discord name
+                if (mcName.includes(displayName) || mcName.includes(userName)) return true;
+                
+                return false;
+            });
 
             if (member) {
                 console.log(`[MC SYNC DEBUG] Found Discord user: ${member.user.tag}`);
